@@ -254,11 +254,11 @@ else:
     st.write("""
     ### How This Estimate Works
     The estimated credit score increase is based on typical FICO score impacts from personal loans:
-
-    - **Small Loans** ($1-$10k): 5-15 points
-    - **Medium Loans** ($10k-$25k): 10-20 points
-    - **Large Loans** ($25k+): 15-30 points
-
+    
+    - **Small Loans** ($1,000–$10,000): 5-15 points
+    - **Medium Loans** ($10,000–$25,000): 10-20 points
+    - **Large Loans** ($25,000+): 15-30 points
+    
     ⚠️ **Note:** Actual score increases depend on:
     - Making regular, on-time payments
     - Your current credit score
