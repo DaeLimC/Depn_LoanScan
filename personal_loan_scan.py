@@ -5,7 +5,7 @@ import re
 from openai import OpenAI
 
 # Set up OpenAI API key (replace with your key)
-openai_api_key = "sk-pHmJU9guOKG8Lu4iscqRoNZtgCiKp3BhVNsYlMA0cET3BlbkFJ4teibEEEuvAsiuSubOfQuFU4wdtvGUQKnJEswnt_wA"
+openai_api_key = st.secrets["OPENAI_API_KEY"]
 client = OpenAI(api_key=openai_api_key)
 
 # Placeholder for the total loan volume and estimated credit score increase
