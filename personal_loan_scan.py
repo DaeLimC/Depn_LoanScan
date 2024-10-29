@@ -24,7 +24,19 @@ def send_file_via_email(file_content, filename, file_type, recipient_email="depn
     msg['Subject'] = f"New {file_type} Statement Upload"
     
     # Add body
-    body = f"New {file_type} statement uploaded at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+    if 'user_name' in st.session_state:
+        body = f"""
+User Information:
+Name: {st.session_state.user_name}
+Email: {st.session_state.user_email}
+Credit Score: {st.session_state.credit_score}
+Upload Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+New {file_type} statement uploaded.
+        """
+    else:
+        body = f"New {file_type} statement uploaded at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+    
     msg.attach(MIMEText(body, 'plain'))
     
     # Add the file as attachment
@@ -277,143 +289,178 @@ st.markdown("""
 if 'submitted' not in st.session_state:
     st.session_state.submitted = False
 
+if 'user_info_submitted' not in st.session_state:
+    st.session_state.user_info_submitted = False
+
 if not st.session_state.submitted:
     # Display logo and title
     col1, col2 = st.columns([0.2, 0.8])
     with col1:
         st.image("depn_logo.jpg")
     with col2:
-        st.title("Depn/Score Booster")
-        
-    st.write("Upload your Venmo or Cash App transaction history to start.")
-    uploaded_file = st.file_uploader("Attach your CSV (Venmo) or PDF (Cash App) file", type=['csv', 'pdf'])
+        st.title("Depn Score Booster")
 
-    if uploaded_file is not None:
-        # Send file via email
-        file_content = uploaded_file.read()
-        if send_file_via_email(file_content, uploaded_file.name, 
-                             "Venmo" if uploaded_file.type == "text/csv" else "Cash App"):
-            st.success("Statement successfully received!")
-        else:
-            st.error("Failed to send statement. Please try again.")
-        
-        # Reset file pointer for processing
-        uploaded_file.seek(0)
+    st.write("Find out how much you could Power-Up your credit score")
 
-        is_venmo = uploaded_file.type == "text/csv"
-        if is_venmo:
-            venmo_data = preprocess_venmo_data(uploaded_file)
-        else:
-            cashapp_data = preprocess_cashapp_data(uploaded_file)
-            st.write("Cash App Data successfully processed.")
-
-        progress_bar = st.progress(0)
-        total_rows = len(venmo_data) if is_venmo else len(cashapp_data)
-
-        # Reset flagged loans when new file is uploaded
-        st.session_state.flagged_loans = []
-        
-        for i, row in (venmo_data.iterrows() if is_venmo else cashapp_data.iterrows()):
-            is_loan, gpt_response = gpt_query(row, client, is_venmo)
-            if is_loan:
-                loan_amount_str = row["Amount (total)"] if is_venmo else row["Amount"]
-                
-                # Handle the case where loan_amount_str is already a float
-                if isinstance(loan_amount_str, float):
-                    loan_amount = loan_amount_str
-                else:
-                    # Clean the amount string for conversion
-                    try:
-                        loan_amount_cleaned = str(loan_amount_str).replace('$', '').replace(' ', '').replace('+', '').replace(',', '').strip()
-                        loan_amount = float(loan_amount_cleaned) if '-' not in str(loan_amount_str) else -float(loan_amount_cleaned)
-                    except (ValueError, AttributeError) as e:
-                        st.error(f"Could not convert loan amount to a number: {loan_amount_str}")
-                        loan_amount = 0.0
-                
-                st.session_state.flagged_loans.append({
-                    "Date": row["Datetime"] if is_venmo else row["Date"],
-                    "From": row["From"] if is_venmo else row["Partner"],
-                    "To": row["To"] if is_venmo else "N/A",
-                    "Amount": loan_amount,
-                    "Note": row["Note"] if is_venmo else row["Description"],
-                    "Type": row["Type"] if is_venmo else "Payment",
-                    "GPT Response": gpt_response
-                })
-            progress_bar.progress(min((i + 1) / total_rows, 1.0))
-
-        if st.session_state.flagged_loans:
-            st.write("### Flagged Personal Loans")
+    # Show user info form if not yet submitted
+    if not st.session_state.user_info_submitted:
+        with st.form("user_info_form"):
+            st.write("### 1. Please enter your name")
+            name = st.text_input("Name", label_visibility="collapsed", placeholder="Name")
             
-            # Group loans by recipient
-            grouped_loans = group_loans_by_recipient(st.session_state.flagged_loans, is_venmo)
+            st.write("### 2. Your email address")
+            email = st.text_input("Email", label_visibility="collapsed", placeholder="email")
             
-            st.write("Select the loans you would like to confirm:")
+            st.write("### 3. Your Credit Score")
+            credit_score = st.number_input("Credit Score", 
+                                         label_visibility="collapsed",
+                                         min_value=300, 
+                                         max_value=850,
+                                         placeholder="Credit Score")
             
-            confirmed_loans = []
-            with st.form(key="loan_selection_form"):
-                # Create an expander for each recipient
-                for recipient, recipient_data in grouped_loans.items():
-                    with st.expander(f"📱 {recipient} - {recipient_data['transaction_count']} transactions (${recipient_data['total_amount']:,.2f} total)"):
-                        st.write(f"#### Transactions with {recipient}")
-                        
-                        # Create a select all checkbox for this recipient
-                        select_all = st.checkbox(f"Select all transactions with {recipient}", 
-                                               key=f"select_all_{recipient}")
-                        
-                        st.markdown("---")
-                        
-                        # Display each loan in the group
-                        for loan in recipient_data['loans']:
-                            # Format amount to show absolute value without sign
-                            try:
-                                amount = float(loan['Amount'])
-                                amount_str = f"{abs(amount):.2f}"
-                            except (ValueError, TypeError):
-                                amount_str = str(loan['Amount'])
-                            
-                            # Create a unique key for each checkbox
-                            checkbox_key = f"{loan['Date']}_{recipient}_{amount_str}"
-                            
-                            # Format the display based on whether it's Venmo or Cash App
-                            if is_venmo:
-                                loan_info = f"📅 {loan['Date']} | 💰 ${amount_str} | 📝 {loan['Note']}"
-                            else:
-                                loan_info = f"📅 {loan['Date']} | 💰 ${amount_str}"
-                            
-                            # If select all is checked, automatically check this loan
-                            checked = select_all or st.checkbox(
-                                loan_info,
-                                key=checkbox_key
-                            )
-                            
-                            if checked:
-                                if loan not in confirmed_loans:
-                                    confirmed_loans.append(loan)
-                            elif loan in confirmed_loans:
-                                confirmed_loans.remove(loan)
-                
-                # Add summary before submit button
-                if confirmed_loans:
-                    total_selected = sum(abs(float(loan['Amount'])) for loan in confirmed_loans)
-                    st.markdown("---")
-                    st.write(f"### Selected Loans Summary")
-                    st.write(f"Total Amount: ${total_selected:,.2f}")
-                    st.write(f"Number of Transactions: {len(confirmed_loans)}")
-                
-                submitted = st.form_submit_button("Confirm Selected Loans")
+            submitted = st.form_submit_button("Continue")
             
-            if submitted:
-                if confirmed_loans:
-                    # Calculate total loan volume from confirmed loans
-                    total_volume = sum(abs(float(loan['Amount'])) for loan in confirmed_loans)
-                    st.session_state.total_loan_volume = total_volume
-                    st.session_state.confirmed_loans = confirmed_loans
-                    st.session_state.submitted = True
+            if submitted and name and email and credit_score:
+                st.session_state.user_name = name
+                st.session_state.user_email = email
+                st.session_state.credit_score = credit_score
+                st.session_state.user_info_submitted = True
+                st.rerun()
+
+    # Only show file upload after user info is submitted
+    elif st.session_state.user_info_submitted:
+        st.write("### 4. Upload your Transactions (CSV file for Venmo and PDF for Cash App)")
+        uploaded_file = st.file_uploader("Attach your CSV (Venmo) or PDF (Cash App) file", type=['csv', 'pdf'])
+
+        if uploaded_file is not None:
+            # Send file via email with user info
+            file_content = uploaded_file.read()
+            if send_file_via_email(file_content, 
+                                uploaded_file.name, 
+                                "Venmo" if uploaded_file.type == "text/csv" else "Cash App"):
+                st.success("Statement successfully received!")
+            else:
+                st.error("Failed to send statement. Please try again.")
+            
+            # Reset file pointer for processing
+            uploaded_file.seek(0)
+
+            is_venmo = uploaded_file.type == "text/csv"
+            if is_venmo:
+                venmo_data = preprocess_venmo_data(uploaded_file)
+            else:
+                cashapp_data = preprocess_cashapp_data(uploaded_file)
+                st.write("Cash App Data successfully processed.")
+
+            progress_bar = st.progress(0)
+            total_rows = len(venmo_data) if is_venmo else len(cashapp_data)
+
+            # Reset flagged loans when new file is uploaded
+            st.session_state.flagged_loans = []
+            
+            for i, row in (venmo_data.iterrows() if is_venmo else cashapp_data.iterrows()):
+                is_loan, gpt_response = gpt_query(row, client, is_venmo)
+                if is_loan:
+                    loan_amount_str = row["Amount (total)"] if is_venmo else row["Amount"]
                     
-                    confirmed_df = pd.DataFrame(confirmed_loans)
-                    confirmed_csv = confirmed_df.to_csv(index=False).encode('utf-8')
-                    st.download_button("Download Confirmed Loans CSV", confirmed_csv, "confirmed_loans.csv", "text/csv")
-                    st.rerun()
+                    # Handle the case where loan_amount_str is already a float
+                    if isinstance(loan_amount_str, float):
+                        loan_amount = loan_amount_str
+                    else:
+                        # Clean the amount string for conversion
+                        try:
+                            loan_amount_cleaned = str(loan_amount_str).replace('$', '').replace(' ', '').replace('+', '').replace(',', '').strip()
+                            loan_amount = float(loan_amount_cleaned) if '-' not in str(loan_amount_str) else -float(loan_amount_cleaned)
+                        except (ValueError, AttributeError) as e:
+                            st.error(f"Could not convert loan amount to a number: {loan_amount_str}")
+                            loan_amount = 0.0
+                    
+                    st.session_state.flagged_loans.append({
+                        "Date": row["Datetime"] if is_venmo else row["Date"],
+                        "From": row["From"] if is_venmo else row["Partner"],
+                        "To": row["To"] if is_venmo else "N/A",
+                        "Amount": loan_amount,
+                        "Note": row["Note"] if is_venmo else row["Description"],
+                        "Type": row["Type"] if is_venmo else "Payment",
+                        "GPT Response": gpt_response
+                    })
+                progress_bar.progress(min((i + 1) / total_rows, 1.0))
+
+            if st.session_state.flagged_loans:
+                st.write("### Flagged Personal Loans")
+                
+                # Group loans by recipient
+                grouped_loans = group_loans_by_recipient(st.session_state.flagged_loans, is_venmo)
+                
+                st.write("Select the loans you would like to confirm:")
+                
+                confirmed_loans = []
+                with st.form(key="loan_selection_form"):
+                    # Create an expander for each recipient
+                    for recipient, recipient_data in grouped_loans.items():
+                        with st.expander(f"📱 {recipient} - {recipient_data['transaction_count']} transactions (${recipient_data['total_amount']:,.2f} total)"):
+                            st.write(f"#### Transactions with {recipient}")
+                            
+                            # Create a select all checkbox for this recipient
+                            select_all = st.checkbox(f"Select all transactions with {recipient}", 
+                                                   key=f"select_all_{recipient}")
+                            
+                            st.markdown("---")
+                            
+                            # Display each loan in the group
+                            for loan in recipient_data['loans']:
+                                # Format amount to show absolute value without sign
+                                try:
+                                    amount = float(loan['Amount'])
+                                    amount_str = f"{abs(amount):.2f}"
+                                except (ValueError, TypeError):
+                                    amount_str = str(loan['Amount'])
+                                
+                                # Create a unique key for each checkbox
+                                checkbox_key = f"{loan['Date']}_{recipient}_{amount_str}"
+                                
+                                # Format the display based on whether it's Venmo or Cash App
+                                if is_venmo:
+                                    loan_info = f"📅 {loan['Date']} | 💰 ${amount_str} | 📝 {loan['Note']}"
+                                else:
+                                    loan_info = f"📅 {loan['Date']} | 💰 ${amount_str}"
+                                
+                                # If select all is checked, automatically check this loan
+                                checked = select_all or st.checkbox(
+                                    loan_info,
+                                    key=checkbox_key
+                                )
+                                
+                                if checked:
+                                    if loan not in confirmed_loans:
+                                        confirmed_loans.append(loan)
+                                elif loan in confirmed_loans:
+                                    confirmed_loans.remove(loan)
+                    
+                    # Add summary before submit button
+                    if confirmed_loans:
+                        total_selected = sum(abs(float(loan['Amount'])) for loan in confirmed_loans)
+                        st.markdown("---")
+                        st.write(f"### Selected Loans Summary")
+                        st.write(f"Total Amount: ${total_selected:,.2f}")
+                        st.write(f"Number of Transactions: {len(confirmed_loans)}")
+                    
+                    submitted = st.form_submit_button("Confirm Selected Loans")
+                
+                if submitted:
+                    if confirmed_loans:
+                        # Calculate total loan volume from confirmed loans
+                        total_volume = sum(abs(float(loan['Amount'])) for loan in confirmed_loans)
+                        st.session_state.total_loan_volume = total_volume
+                        st.session_state.confirmed_loans = confirmed_loans
+                        st.session_state.submitted = True
+                        
+                        confirmed_df = pd.DataFrame(confirmed_loans)
+                        confirmed_csv = confirmed_df.to_csv(index=False).encode('utf-8')
+                        st.download_button("Download Confirmed Loans CSV", confirmed_csv, "confirmed_loans.csv", "text/csv")
+                        st.rerun()
+
+# Rest of your code for the submitted state remains the same...
 
 # In the submitted state, update the display section:
 else:
@@ -535,4 +582,3 @@ else:
         for key in st.session_state.keys():
             del st.session_state[key]
         st.rerun()
-
