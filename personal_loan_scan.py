@@ -3,7 +3,7 @@ import pandas as pd
 import pdfplumber
 import re
 from openai import OpenAI
-
+from PIL import Image
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
@@ -172,6 +172,7 @@ def gpt_query(row, client, is_venmo=True):
         if isinstance(amount_str, float):
             amount = amount_str
         else:
+            # Clean the amount string for conversion
             amount = float(amount_str)
             
         # Check if amount is less than $10 (absolute value)
@@ -255,14 +256,35 @@ def calculate_credit_score_impact(loan_volume: float) -> dict:
     return impacts
 
 # Streamlit app design
-st.set_page_config(page_title="Credit Bump", page_icon="💳", layout="centered")
+st.set_page_config(page_title="Depn/Score Booster", page_icon="depn_logo.jpg", layout="centered")
+
+# Custom CSS for logo sizing
+st.markdown("""
+    <style>
+        [data-testid="stImage"] {
+            width: 100px !important;  # Increased from 60px to 100px
+            margin-top: 0px !important;
+        }
+        [data-testid="stMarkdownContainer"] h1 {
+            padding-top: 15px !important;
+            margin-left: 10px !important;
+            font-size: 32px !important;  # Explicitly set title font size for reference
+        }
+    </style>
+    """, unsafe_allow_html=True)
 
 # --- HOME PAGE ---
 if 'submitted' not in st.session_state:
     st.session_state.submitted = False
 
 if not st.session_state.submitted:
-    st.title("💳 Depn/Score Booster")
+    # Display logo and title
+    col1, col2 = st.columns([0.2, 0.8])
+    with col1:
+        st.image("depn_logo.jpg")
+    with col2:
+        st.title("Depn/Score Booster")
+        
     st.write("Upload your Venmo or Cash App transaction history to start.")
     uploaded_file = st.file_uploader("Attach your CSV (Venmo) or PDF (Cash App) file", type=['csv', 'pdf'])
 
@@ -304,9 +326,9 @@ if not st.session_state.submitted:
                     try:
                         loan_amount_cleaned = str(loan_amount_str).replace('$', '').replace(' ', '').replace('+', '').replace(',', '').strip()
                         loan_amount = float(loan_amount_cleaned) if '-' not in str(loan_amount_str) else -float(loan_amount_cleaned)
-                    except (ValueError, AttributeError):
+                    except (ValueError, AttributeError) as e:
                         st.error(f"Could not convert loan amount to a number: {loan_amount_str}")
-                        loan_amount = 0.0  # Assign a default value if conversion fails
+                        loan_amount = 0.0
                 
                 st.session_state.flagged_loans.append({
                     "Date": row["Datetime"] if is_venmo else row["Date"],
@@ -314,7 +336,7 @@ if not st.session_state.submitted:
                     "To": row["To"] if is_venmo else "N/A",
                     "Amount": loan_amount,
                     "Note": row["Note"] if is_venmo else row["Description"],
-                    "Type": row["Type"] if is_venmo else "Payment",  # Include Type for Venmo
+                    "Type": row["Type"] if is_venmo else "Payment",
                     "GPT Response": gpt_response
                 })
             progress_bar.progress(min((i + 1) / total_rows, 1.0))
@@ -395,7 +417,13 @@ if not st.session_state.submitted:
 
 # In the submitted state, update the display section:
 else:
-    st.title("Submitted!")
+    # Display logo and title in the submitted state
+    col1, col2 = st.columns([1, 6])
+    with col1:
+        st.image("depn_logo.jpg")
+    with col2:
+        st.title("Submitted!")
+        
     st.write("### Summary of Personal Loans")
 
     # Create columns for the metrics
