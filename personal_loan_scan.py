@@ -262,7 +262,7 @@ if 'submitted' not in st.session_state:
     st.session_state.submitted = False
 
 if not st.session_state.submitted:
-    st.title("💳 Credit Bump?")
+    st.title("💳 Depn/Score Booster")
     st.write("Upload your Venmo or Cash App transaction history to start.")
     uploaded_file = st.file_uploader("Attach your CSV (Venmo) or PDF (Cash App) file", type=['csv', 'pdf'])
 
