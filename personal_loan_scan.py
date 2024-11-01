@@ -11,6 +11,7 @@ from email.mime.text import MIMEText
 from email import encoders 
 from datetime import datetime  
 
+
 #send email upon submission function 
 def send_file_via_email(file_content, filename, file_type, recipient_email="depnchung@gmail.com"):
     # Email settings
@@ -101,8 +102,8 @@ def group_loans_by_recipient(loans_data, is_venmo):
             else:
                 recipient = loan['To']    # For payments, the receiver is the recipient
         else:
-            # For Cash App, extract recipient from the Note/Description field
-            recipient = extract_cashapp_recipient(loan['Note'])
+            # For Cash App, use the Partner field directly
+            recipient = loan['From']
         
         if recipient not in grouped_loans:
             grouped_loans[recipient] = {
@@ -128,9 +129,50 @@ def preprocess_venmo_data(data):
     venmo_cleaned = venmo_cleaned[relevant_columns]
     return venmo_cleaned
 
-# Function to preprocess Cash App PDF file and convert it to a DataFrame
+def clean_partner_name(partner):
+    # Remove anything with ".00" in it and any trailing spaces
+    partner = re.sub(r'\s*\$?\d+\.00.*$', '', partner)
+    return partner.strip()
+
+def extract_transaction_details(line):
+    parts = line.split(' ')
+    if len(parts) < 3:
+        return None
+
+    date = ' '.join(parts[:2])
+    amount = parts[-1].replace('$', '').replace(',', '')
+    description = ' '.join(parts[2:-1])
+    description_clean = re.sub(r'(Cash App payment|Standard transfer)', '', description).strip()
+
+    if 'To' in description_clean or 'From' in description_clean:
+        # August format
+        partner = None
+        match_between_to_from = re.search(r'To\s(.+?)\sfrom', description_clean)
+        match_after_to = re.search(r'To\s([\w\s]+)', description_clean)
+        match_after_from = re.search(r'From\s([\w\s]+)', description_clean)
+
+        if match_between_to_from:
+            partner = match_between_to_from.group(1).strip()
+        elif match_after_to:
+            partner = match_after_to.group(1).strip()
+            amount = f"-{amount}"
+        elif match_after_from:
+            partner = match_after_from.group(1).strip()
+            amount = f"+{amount}"
+    else:
+        # July format
+        partner = description_clean
+        amount = f"-{amount}"
+
+    # Clean the partner name
+    partner = clean_partner_name(partner)
+
+    return [date, description_clean, amount, partner]
+
 def preprocess_cashapp_data(pdf_file):
+    """Process Cash App statement and return DataFrame"""
     transactions_data = []
+
     with pdfplumber.open(pdf_file) as pdf:
         for page in pdf.pages:
             text = page.extract_text()
@@ -138,38 +180,40 @@ def preprocess_cashapp_data(pdf_file):
                 transactions_section = text.split('Transactions')[1]
             else:
                 transactions_section = text
+
             transactions_lines = transactions_section.split('\n')
+
             for line in transactions_lines:
                 if line.strip():
-                    parts = line.split(' ')
-                    if len(parts) > 2:
-                        date = ' '.join(parts[:2])
-                        amount = parts[-1].replace('$', '').replace(',', '')
-                        if 'From' in line:
-                            amount = f"+{amount}"
-                        else:
-                            amount = f"-{amount}"
-                        description = ' '.join(parts[2:-1])
-                        description_clean = re.sub(r'(Cash App payment|Standard transfer)', '', description).strip()
-                        partner = None
-                        match_between_to_from = re.search(r'To\s(.+?)\sfrom', description_clean)
-                        match_after_to = re.search(r'To\s([\w\s]+)', description_clean)
-                        match_after_from = re.search(r'From\s([\w\s]+)', description_clean)
-                        if match_between_to_from:
-                            partner = match_between_to_from.group(1).strip()
-                        elif match_after_to:
-                            partner = match_after_to.group(1).strip()
-                        elif match_after_from:
-                            partner = match_after_from.group(1).strip()
-                        else:
-                            partner = "Unknown"
-                        transactions_data.append([date, description_clean, amount, partner])
-    cashapp_cleaned = pd.DataFrame(transactions_data, columns=['Date', 'Description', 'Amount', 'Partner'])
+                    transaction = extract_transaction_details(line)
+                    if transaction:
+                        transactions_data.append(transaction)
+
+    df = pd.DataFrame(transactions_data, columns=['Date', 'Description', 'Amount', 'Partner'])
+
     def is_valid_transaction(row):
-        return row['Date'].strip().split()[0] in ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-    cashapp_cleaned = cashapp_cleaned[cashapp_cleaned.apply(is_valid_transaction, axis=1)]
-    cashapp_cleaned['Amount'] = pd.to_numeric(cashapp_cleaned['Amount'], errors='coerce')
-    return cashapp_cleaned
+        return row['Date'].strip().split()[0] in ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                                                 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+    df_cleaned = df[df.apply(is_valid_transaction, axis=1)]
+    df_cleaned['Amount'] = pd.to_numeric(df_cleaned['Amount'], errors='coerce')
+    df_cleaned.reset_index(drop=True, inplace=True)
+
+    # Generate unique filename using UUID
+    # output_filename = f'output_{uuid.uuid4()}.csv'
+    # df_cleaned.to_csv(output_filename, index=False)
+    # st.write(f"Processed data saved to {output_filename}")
+    
+    # Display the first few rows of the processed data
+    # st.write("### Processed Transactions Preview:")
+    # st.dataframe(df_cleaned)
+    
+    # # Display partner distribution
+    # st.write("### Partner Distribution:")
+    # partner_counts = df_cleaned['Partner'].value_counts()
+    # st.dataframe(partner_counts)
+
+    return df_cleaned
 
 # Function to query GPT for each row
 def gpt_query(row, client, is_venmo=True):
@@ -391,9 +435,9 @@ if not st.session_state.submitted:
                 
                 # Group loans by recipient
                 grouped_loans = group_loans_by_recipient(st.session_state.flagged_loans, is_venmo)
-                
+
                 st.write("Select the loans you would like to confirm:")
-                
+
                 confirmed_loans = []
                 with st.form(key="loan_selection_form"):
                     # Create an expander for each recipient
@@ -401,14 +445,15 @@ if not st.session_state.submitted:
                         with st.expander(f"📱 {recipient} - {recipient_data['transaction_count']} transactions (${recipient_data['total_amount']:,.2f} total)"):
                             st.write(f"#### Transactions with {recipient}")
                             
-                            # Create a select all checkbox for this recipient
+                            # Create a unique key for select all checkbox
+                            select_all_key = f"select_all_{recipient.replace(' ', '_')}"
                             select_all = st.checkbox(f"Select all transactions with {recipient}", 
-                                                   key=f"select_all_{recipient}")
+                                                key=select_all_key)
                             
                             st.markdown("---")
                             
                             # Display each loan in the group
-                            for loan in recipient_data['loans']:
+                            for idx, loan in enumerate(recipient_data['loans']):
                                 # Format amount to show absolute value without sign
                                 try:
                                     amount = float(loan['Amount'])
@@ -416,8 +461,9 @@ if not st.session_state.submitted:
                                 except (ValueError, TypeError):
                                     amount_str = str(loan['Amount'])
                                 
-                                # Create a unique key for each checkbox
-                                checkbox_key = f"{loan['Date']}_{recipient}_{amount_str}"
+                                # Create a unique key for each checkbox using multiple unique identifiers
+                                unique_id = f"{recipient.replace(' ', '_')}_{idx}_{amount_str}"
+                                checkbox_key = f"loan_{unique_id}"
                                 
                                 # Format the display based on whether it's Venmo or Cash App
                                 if is_venmo:
@@ -446,7 +492,6 @@ if not st.session_state.submitted:
                         st.write(f"Number of Transactions: {len(confirmed_loans)}")
                     
                     submitted = st.form_submit_button("Confirm Selected Loans")
-                
                 if submitted:
                     if confirmed_loans:
                         # Calculate total loan volume from confirmed loans
